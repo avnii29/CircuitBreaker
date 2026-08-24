@@ -1,0 +1,68 @@
+databases:
+  - name: circuitbreaker-db
+    databaseName: circuitbreaker
+    user: circuitbreaker
+    plan: free
+
+services:
+  - type: keyvalue
+    name: circuitbreaker-redis
+    ipAllowList: []
+    plan: free
+    maxmemoryPolicy: noeviction
+
+  - type: web
+    name: circuitbreaker-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health/ready
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: circuitbreaker-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "true"
+      - key: REDIS_URL
+        fromService:
+          name: circuitbreaker-redis
+          type: keyvalue
+          property: connectionString
+      - key: AUTO_CREATE_SCHEMA
+        value: "false"
+      - key: DEMO_MODE
+        value: "true"
+      - key: LLM_PROVIDER
+        value: simulated
+      - key: WORKER_ENABLED
+        value: "true"
+      - key: API_KEY_READ
+        sync: false
+      - key: API_KEY_WRITE
+        sync: false
+      - key: API_KEY_OPS
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: TENANT_KEYS_JSON
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: RECOVERY_WINDOW_SECONDS
+        value: "180"
+      - key: DEMO_RECOVERY_WINDOW_SECONDS
+        value: "30"
+      - key: MAX_RECOVERY_ATTEMPTS
+        value: "3"
+      - key: MAX_CART_HOLD_SECONDS
+        value: "180"
+      - key: CIRCUIT_FAILURE_RATE_THRESHOLD
+        value: "0.30"
+      - key: CIRCUIT_MIN_SAMPLES
+        value: "8"
+      - key: CIRCUIT_WINDOW_SECONDS
+        value: "60"
+      - key: CIRCUIT_COOLDOWN_SECONDS
+        value: "60"

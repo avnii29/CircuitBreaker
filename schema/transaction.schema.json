@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://circuitbreaker.internal/schemas/transaction.json",
+  "title": "CircuitBreakerTransaction",
+  "description": "Canonical schema for a CircuitBreaker payment-recovery transaction, including lifecycle, guardrails, and audit trail.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "transaction_id",
+    "state",
+    "customer",
+    "order",
+    "routing",
+    "recovery",
+    "audit_trail",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "transaction_id": {
+      "type": "string",
+      "pattern": "^TXN_CB_[0-9]{6}$"
+    },
+    "state": {
+      "$ref": "#/$defs/lifecycleState"
+    },
+    "customer": {
+      "$ref": "#/$defs/customerDetails"
+    },
+    "order": {
+      "$ref": "#/$defs/orderPayload"
+    },
+    "routing": {
+      "$ref": "#/$defs/routingTelemetry"
+    },
+    "recovery": {
+      "$ref": "#/$defs/recoveryState"
+    },
+    "audit_trail": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/auditEvent"
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "batch_id": {
+      "type": ["string", "null"]
+    },
+    "cart_status": {
+      "type": "string",
+      "enum": ["HELD", "RELEASED"]
+    },
+    "money_recovered": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bank": {
+      "type": "string"
+    },
+    "failure_reason": {
+      "type": "string"
+    },
+    "demo_scenario": {
+      "type": "string"
+    },
+    "smart_routing": {
+      "anyOf": [
+        { "type": "object", "additionalProperties": true },
+        { "type": "null" }
+      ]
+    },
+    "failed_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "tenant_id": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "lifecycleState": {
+      "type": "string",
+      "enum": [
+        "INITIATED",
+        "FAILED",
+        "AUTOMATED_LOOP",
+        "RETRYING",
+        "REROUTING",
+        "RECOVERED",
+        "ESCALATED"
+      ]
+    },
+    "customerDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "email", "phone"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "email": { "type": "string", "minLength": 3 },
+        "phone": { "type": "string", "minLength": 8 }
+      }
+    },
+    "orderItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sku", "name", "quantity", "unit_amount"],
+      "properties": {
+        "sku": { "type": "string" },
+        "name": { "type": "string" },
+        "quantity": { "type": "integer", "minimum": 1 },
+        "unit_amount": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "orderPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order_id", "merchant_id", "merchant_name", "items", "amount", "currency"],
+      "properties": {
+        "order_id": { "type": "string" },
+        "merchant_id": { "type": "string" },
+        "merchant_name": { "type": "string" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/orderItem" }
+        },
+        "amount": { "type": "integer", "minimum": 1 },
+        "currency": { "type": "string", "const": "INR" },
+        "reservation_id": { "type": ["string", "null"] },
+        "cart_released_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "routingTelemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bank",
+        "attempted_route",
+        "fallback_route",
+        "error_code",
+        "error_label",
+        "diagnosis",
+        "recovery_eligible",
+        "simulation_error"
+      ],
+      "properties": {
+        "bank": { "type": "string" },
+        "attempted_route": { "type": "string" },
+        "fallback_route": { "type": "string" },
+        "error_code": {
+          "type": "string",
+          "enum": [
+            "ERR_NPCI_U30",
+            "ERR_NPCI_U28",
+            "ERR_TIMEOUT",
+            "ERR_BANK_UNAVAILABLE",
+            "ERR_NETWORK_TIMEOUT",
+            "ERR_INSUFFICIENT_FUNDS",
+            "ERR_FRAUD_SUSPECTED",
+            "ERR_RISK_BLOCK",
+            "ERR_BANK_DOWN"
+          ]
+        },
+        "error_label": { "type": "string" },
+        "diagnosis": { "type": "string" },
+        "recovery_eligible": { "type": "boolean" },
+        "simulation_error": { "type": "boolean" },
+        "latency_ms": { "type": "integer", "minimum": 0 },
+        "recovery_strategy": { "type": "string" },
+        "last_route_outcome": { "type": ["string", "null"] },
+        "route_attempts": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "guardrailCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label", "passed"],
+      "properties": {
+        "key": { "type": "string" },
+        "label": { "type": "string" },
+        "passed": { "type": "boolean" }
+      }
+    },
+    "guardrailResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "checks", "output_message"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "checks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/guardrailCheck" }
+        },
+        "output_message": { "type": "string" },
+        "blocked_reason": { "type": ["string", "null"] },
+        "reason": { "type": "string" },
+        "used_fallback": { "type": "boolean" }
+      }
+    },
+    "recoveryState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "window_seconds",
+        "window_started_at",
+        "window_expires_at",
+        "attempt_count",
+        "max_attempts",
+        "payment_link",
+        "cart_held"
+      ],
+      "properties": {
+        "window_seconds": { "type": "integer", "minimum": 1 },
+        "window_started_at": { "type": "string", "format": "date-time" },
+        "window_expires_at": { "type": "string", "format": "date-time" },
+        "attempt_count": { "type": "integer", "minimum": 0 },
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "payment_link": {
+          "type": "string",
+          "pattern": "^https://rzp\\.io/demo/TXN_CB_[0-9]{6}$"
+        },
+        "cart_held": { "type": "boolean" },
+        "recommendation": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
+        "customer_message": { "type": "string" },
+        "raw_llm_output": { "type": "string" },
+        "ai_simulation": { "type": "boolean" },
+        "guardrail": {
+          "anyOf": [
+            { "$ref": "#/$defs/guardrailResult" },
+            { "type": "null" }
+          ]
+        },
+        "recovered_at": { "type": ["string", "null"], "format": "date-time" },
+        "escalated_at": { "type": ["string", "null"], "format": "date-time" },
+        "auto_recover": { "type": "boolean" },
+        "recovery_route": { "type": "string" },
+        "message_language": { "type": "string" },
+        "message_channel": { "type": "string" },
+        "message_generated_at": { "type": ["string", "null"], "format": "date-time" },
+        "alternate_link_generated": { "type": ["string", "null"] },
+        "cooldown_routes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "force_route_failure": { "type": "boolean" },
+        "locked_amount": { "type": ["integer", "null"], "minimum": 1 },
+        "retry_count": { "type": "integer", "minimum": 0 },
+        "last_attempt_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "auditEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timestamp",
+        "action",
+        "transaction_id",
+        "actor"
+      ],
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "action": { "type": "string", "minLength": 1 },
+        "transaction_id": { "type": "string" },
+        "previous_state": {
+          "anyOf": [
+            { "$ref": "#/$defs/lifecycleState" },
+            { "type": "null" }
+          ]
+        },
+        "new_state": {
+          "anyOf": [
+            { "$ref": "#/$defs/lifecycleState" },
+            { "type": "null" }
+          ]
+        },
+        "actor": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

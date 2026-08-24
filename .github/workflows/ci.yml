@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: sqlite+aiosqlite:///./.pytest_cb.db
+      API_KEY_READ: test-read-key
+      API_KEY_WRITE: test-write-key
+      DEMO_MODE: "true"
+      CORS_ORIGINS: "*"
+      WEBHOOK_URL: ""
+      API_KEY_OPS: test-ops-key
+      TENANT_KEYS_JSON: '[{"tenant_id":"TENANT_A","read":"key-a-read","write":"key-a-write"},{"tenant_id":"TENANT_B","read":"key-b-read","write":"key-b-write"}]'
+      WORKER_ENABLED: "false"
+      AUTO_CREATE_SCHEMA: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: pip install -r requirements.txt ruff
+      - name: Lint
+        run: ruff check app tests
+      - name: Test
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: npm install
+      - name: Production build
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: https://circuitbreaker-api.onrender.com
+          VITE_API_KEY: test-write-key
+
+  backend-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -t circuitbreaker-api ./backend

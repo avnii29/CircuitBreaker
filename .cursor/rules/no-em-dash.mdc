@@ -1,0 +1,14 @@
+---
+description: Never use typographic dashes (em dash or en dash) in CircuitBreaker source or copy.
+alwaysApply: true
+---
+
+# No typographic dashes
+
+Never use an em dash (`—`) or en dash (`–`) in this repository.
+
+- In UI copy, comments, strings, tests, and docs, use a hyphen (`-`), colon, period, or rewrite the sentence.
+- Empty placeholders must be `"-"` or `"n/a"`, never `"—"`.
+- Do not introduce these characters in new files.
+
+This rule applies to application source only (`frontend/src`, `backend/app`, `backend/tests`). Do not edit `node_modules` or `.venv`.
