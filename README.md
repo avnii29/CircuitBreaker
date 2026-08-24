@@ -4,6 +4,8 @@ CircuitBreaker is a payment-failure recovery service. When a checkout fails beca
 
 Bank rails and checkouts are simulated. The runtime is a durable service: FastAPI, PostgreSQL, Redis, authentication, idempotency, circuit breakers, adaptive routing, and audit logging.
 
+Live dashboard: https://circuitbreaker-nine.vercel.app/
+
 ## Architecture
 
 ```text
