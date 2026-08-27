@@ -2,6 +2,20 @@ export function formatINR(amount: number): string {
   return `₹${amount.toLocaleString("en-IN")}`;
 }
 
+export function formatLakhs(amount: number): string {
+  if (amount >= 100000) {
+    const lakhs = amount / 100000;
+    const shown = lakhs >= 10 ? lakhs.toFixed(1) : lakhs.toFixed(2);
+    return `₹${shown.replace(/\.0+$/, "").replace(/(\.\d)0$/, "$1")}L`;
+  }
+  return formatINR(amount);
+}
+
+export function formatPercent(value: number): string {
+  const pct = value <= 1 ? value * 100 : value;
+  return `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
+}
+
 export function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-IN", {
     hour12: false,

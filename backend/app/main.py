@@ -3,9 +3,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import asyncio
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.cache import ping_cache
 from app.config import settings
@@ -39,7 +41,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="CircuitBreaker",
-    description="Absorbing downstream system failures to preserve transaction intent.",
+    description="Find revenue slipping away. Understand why. Choose the highest-value safe intervention.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -131,3 +133,20 @@ async def ready() -> JSONResponse:
 @app.get("/metrics")
 async def metrics():
     return metrics_response()
+
+
+@app.exception_handler(Exception)
+async def unhandled_error(_request: Request, exc: Exception):
+    if isinstance(exc, (StarletteHTTPException, RequestValidationError)):
+        raise exc
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "code": "SERVICE_TEMPORARILY_UNAVAILABLE",
+                "message": "Recovery service is temporarily unavailable.",
+                "retryable": True,
+            },
+            "detail": "Recovery service is temporarily unavailable.",
+        },
+    )

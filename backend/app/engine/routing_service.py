@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
 
+from app.config import settings
 from app.engine.decision import compose_recovery_decision, stamp_decision
 from app.engine.failure_classifier import classify_failure
 from app.engine.guardrail import validate_route_execution
@@ -158,6 +160,15 @@ async def classify_transaction(transaction: Transaction, persist_audit: bool = T
     return smart.failure_classification
 
 
+def extend_demo_window(transaction: Transaction) -> None:
+    if not settings.DEMO_MODE:
+        return
+    now = utcnow()
+    seconds = max(int(transaction.recovery.window_seconds or 30), 30)
+    transaction.recovery.window_started_at = now
+    transaction.recovery.window_expires_at = now + timedelta(seconds=seconds)
+
+
 async def select_recovery_route(transaction_id: str) -> SelectRecoveryRouteResponse:
     transaction = await store.get(transaction_id)
     if transaction is None:
@@ -168,12 +179,15 @@ async def select_recovery_route(transaction_id: str) -> SelectRecoveryRouteRespo
             detail="Route selection requires an active recovery state.",
         )
     if utcnow() >= transaction.recovery.window_expires_at:
-        await escalate_transaction(
-            transaction_id,
-            trigger="RECOVERY_WINDOW_EXPIRED",
-            reason="Recovery window expired.",
-        )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Recovery window expired.")
+        if settings.DEMO_MODE:
+            extend_demo_window(transaction)
+        else:
+            await escalate_transaction(
+                transaction_id,
+                trigger="RECOVERY_WINDOW_EXPIRED",
+                reason="Recovery window expired.",
+            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Recovery window expired.")
 
     stats = await store.route_stats()
     payload = transaction.model_dump(mode="json")
@@ -453,6 +467,9 @@ def _mark_recovered(transaction: Transaction, actor: str, route_id: str) -> None
     transaction.money_recovered = transaction.order.amount
     transaction.order.cart_released_at = now
     smart.last_outcome = "SUCCEEDED"
+    from app.engine.economics import stamp_economics
+
+    stamp_economics(transaction)
     append_audit(
         transaction,
         action="RECOVERY_ROUTE_SUCCEEDED",
@@ -482,6 +499,91 @@ def _mark_recovered(transaction: Transaction, actor: str, route_id: str) -> None
         new_state=TransactionState.RECOVERED,
         metadata={"reservation_id": transaction.order.reservation_id, "reason": "recovered", "cart_status": "RELEASED"},
     )
+
+
+async def _recover_simulated_intervention(
+    transaction_id: str,
+    actor: str = Actor.OPERATOR.value,
+) -> ExecuteRecoveryResponse:
+    from app.engine.economics import stamp_economics
+
+    try:
+        async with store.locked(transaction_id):
+            transaction = await store.get(transaction_id)
+            if transaction is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+            if transaction.state == TransactionState.RECOVERED:
+                return ExecuteRecoveryResponse(
+                    executed=False,
+                    blocked=True,
+                    reason="Transaction has already been recovered.",
+                    transaction=transaction,
+                )
+            if transaction.state == TransactionState.ESCALATED:
+                return ExecuteRecoveryResponse(
+                    executed=False,
+                    blocked=True,
+                    reason="Stopping rule already released this held cart.",
+                    transaction=transaction,
+                )
+            if not is_active_recovery(transaction.state):
+                return ExecuteRecoveryResponse(
+                    executed=False,
+                    blocked=True,
+                    reason="Simulated intervention requires an active recovery state.",
+                    transaction=transaction,
+                )
+            smart = _ensure_smart(transaction)
+            payload = smart.economics or {}
+            intervention = str(payload.get("selected_intervention") or "CUSTOMER_REMINDER")
+            label = next(
+                (
+                    str(row.get("label") or intervention)
+                    for row in (payload.get("candidates") or [])
+                    if row.get("id") == intervention
+                ),
+                intervention.replace("_", " ").title(),
+            )
+            append_audit(
+                transaction,
+                action="INTERVENTION_EXECUTED",
+                actor=Actor.RECOVERY_ENGINE.value,
+                previous_state=transaction.state,
+                new_state=transaction.state,
+                metadata={
+                    "intervention": intervention,
+                    "simulated": True,
+                    "label": label,
+                    "amount": transaction.order.amount,
+                },
+                reason=f"Simulated {label} executed.",
+            )
+            _mark_recovered(transaction, actor, intervention)
+            stamp_economics(transaction)
+            await store.upsert(transaction)
+            try:
+                from app.engine.webhooks import emit_resolution_event
+
+                await emit_resolution_event(transaction.transaction_id, "RECOVERED", transaction.order.amount)
+            except Exception:
+                pass
+            saved = await store.get(transaction.transaction_id)
+            return ExecuteRecoveryResponse(
+                executed=True,
+                blocked=False,
+                reason=f"Simulated {label} recovered ₹{transaction.order.amount}.",
+                transaction=saved or transaction,
+            )
+    except ConcurrencyError:
+        transaction = await store.get(transaction_id)
+        if transaction is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+        return ExecuteRecoveryResponse(
+            executed=False,
+            blocked=True,
+            reason="Transaction was updated concurrently. Retry the recovery action.",
+            transaction=transaction,
+        )
 
 
 async def execute_selected_route(
@@ -573,18 +675,21 @@ async def _execute_selected_route(
             )
 
     if utcnow() >= transaction.recovery.window_expires_at:
-        escalated = await escalate_transaction(
-            transaction_id,
-            trigger="RECOVERY_WINDOW_EXPIRED",
-            reason="Recovery window expired.",
-        )
-        return ExecuteSelectedRouteResponse(
-            executed=False,
-            blocked=True,
-            outcome="ESCALATED",
-            reason="Recovery window expired.",
-            transaction=escalated or transaction,
-        )
+        if settings.DEMO_MODE:
+            extend_demo_window(transaction)
+        else:
+            escalated = await escalate_transaction(
+                transaction_id,
+                trigger="RECOVERY_WINDOW_EXPIRED",
+                reason="Recovery window expired.",
+            )
+            return ExecuteSelectedRouteResponse(
+                executed=False,
+                blocked=True,
+                outcome="ESCALATED",
+                reason="Recovery window expired.",
+                transaction=escalated or transaction,
+            )
 
     route_id = smart.selected_route or ""
     catalog = ROUTE_CATALOG.get(route_id)
@@ -794,6 +899,13 @@ async def recover_transaction_with_routing(
     current = await store.get(transaction_id)
     if current is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    if settings.DEMO_MODE and is_active_recovery(current.state):
+        extend_demo_window(current)
+        await store.upsert(current)
+    from app.engine.economics import uses_simulated_path
+
+    if uses_simulated_path(current):
+        return await _recover_simulated_intervention(transaction_id, actor=actor)
     last: ExecuteSelectedRouteResponse | None = None
     from app.engine.retry import backoff_seconds
 
@@ -856,8 +968,11 @@ async def run_smart_routing_batch(transaction_ids: list[str]) -> RoutingSummary:
             escalated_ids.append(after.transaction_id)
 
     looping = [txn for txn in await store.list_all() if txn.transaction_id in transaction_ids]
+    from app.engine.economics import snapshot_metrics
+
+    snap = snapshot_metrics(looping)
     revenue_recovered = sum(txn.order.amount for txn in looping if txn.state == TransactionState.RECOVERED)
-    revenue_at_risk = sum(txn.order.amount for txn in looping if is_active_recovery(txn.state))
+    revenue_at_risk = sum(txn.order.amount for txn in looping)
     evaluated = len([txn_id for txn_id in transaction_ids if txn_id])
     avg = round(attempts_total / max(len(recovered_ids) + len(escalated_ids), 1), 1)
     most = max(effective.items(), key=lambda item: item[1])[0] if effective else None
@@ -872,6 +987,11 @@ async def run_smart_routing_batch(transaction_ids: list[str]) -> RoutingSummary:
         revenue_recovered=revenue_recovered,
         revenue_at_risk=revenue_at_risk,
         most_effective_route=most,
+        net_revenue_protected=int(snap["net_revenue_protected"]),
+        intervention_cost=int(snap["intervention_cost_total"]),
+        intentionally_skipped=int(snap["intentionally_skipped"]),
+        baseline_recovered=int(snap["baseline_recovered"]),
+        incremental_value_protected=int(snap["incremental_value_protected"]),
     )
     await store.save_routing_summary(summary)
     await store.record_routing_event(

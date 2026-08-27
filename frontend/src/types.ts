@@ -163,6 +163,55 @@ export interface RoutingDecisionAlternative {
   score: number;
 }
 
+export interface InterventionCandidate {
+  id: string;
+  label: string;
+  predicted_success_probability: number;
+  expected_recovery_value: number;
+  intervention_cost: number;
+  risk_penalty: number;
+  net_expected_value: number;
+  simulated?: boolean;
+}
+
+export interface RecoveryEconomics {
+  event_type: string;
+  revenue_at_risk: number;
+  root_cause: string;
+  predicted_loss_probability: number;
+  window_recovery_probability?: number;
+  candidates: InterventionCandidate[];
+  selected_action: "ACT" | "DO_NOTHING" | "ESCALATE" | string;
+  selected_intervention: string;
+  predicted_success_probability: number;
+  expected_recovery_value: number;
+  intervention_cost: number;
+  risk_penalty: number;
+  net_expected_value: number;
+  actual_recovered: number;
+  counterfactual: {
+    label: string;
+    without_recovery_rate: number;
+    without_expected: number;
+    with_expected?: number;
+    incremental_expected?: number;
+    incremental_actual?: number;
+  };
+  cost_avoided?: number;
+  rationale: string;
+  priority_score?: number;
+  simulated?: boolean;
+  guardrail_result?: boolean | null;
+  net_revenue_protected?: number;
+}
+
+export interface LeakageBreakdown {
+  event_type: string;
+  count: number;
+  amount: number;
+  recovered: number;
+}
+
 export interface SmartRoutingState {
   failure_classification: FailureClassification | null;
   selected_route: string | null;
@@ -193,6 +242,7 @@ export interface SmartRoutingState {
   learned_score_source?: string;
   last_decision?: Record<string, unknown> | null;
   policy_version?: string;
+  economics?: RecoveryEconomics | null;
 }
 
 export interface RoutingDecision {
@@ -253,6 +303,11 @@ export interface RoutingSummary {
   revenue_recovered: number;
   revenue_at_risk: number;
   most_effective_route: string | null;
+  net_revenue_protected?: number;
+  intervention_cost?: number;
+  intentionally_skipped?: number;
+  baseline_recovered?: number;
+  incremental_value_protected?: number;
 }
 
 export interface RoutingPerformanceResponse {
@@ -309,6 +364,17 @@ export interface BatchResult {
   created_at: string;
   transaction_ids: string[];
   routing_summary: RoutingSummary | null;
+  net_revenue_protected?: number;
+  intervention_cost?: number;
+  intentionally_skipped?: number;
+  agent_act?: number;
+  agent_do_nothing?: number;
+  agent_escalate?: number;
+  revenue_leakage_total?: number;
+  baseline_recovered?: number;
+  incremental_value_protected?: number;
+  cost_avoided_total?: number;
+  leakage?: LeakageBreakdown[];
 }
 
 export interface CircuitBreakerStatus {
@@ -366,6 +432,17 @@ export interface TelemetryDashboard {
   tenant_id?: string | null;
   intelligence?: IntelligenceTelemetry;
   recovery_queue_depth?: number;
+  net_revenue_protected?: number;
+  intervention_cost_total?: number;
+  intentionally_skipped?: number;
+  agent_act?: number;
+  agent_do_nothing?: number;
+  agent_escalate?: number;
+  revenue_leakage_total?: number;
+  baseline_recovered?: number;
+  incremental_value_protected?: number;
+  cost_avoided_total?: number;
+  leakage?: LeakageBreakdown[];
 }
 
 export interface HealthResponse {
@@ -397,7 +474,8 @@ export interface SimulateCheckoutRequest {
 }
 
 export interface SimulateBatchRequest {
-  count: number;
+  count?: number;
+  recover?: boolean;
 }
 
 export interface RunRecoverySimulationResponse {

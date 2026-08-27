@@ -40,6 +40,7 @@ from app.models import (
     BatchResult,
     CircuitBreakerStatus,
     IntelligenceTelemetry,
+    LeakageBreakdown,
     RoutePerformance,
     RoutingDashboardStats,
     RoutingEvent,
@@ -306,21 +307,36 @@ class DurableStore:
             eligible = len(txns)
             rescued = len(recovered)
             rate = round((rescued / eligible) * 100, 2) if eligible else 0.0
+            from app.engine.economics import snapshot_metrics
+
+            snap = snapshot_metrics(txns)
+            skipped = int(snap["intentionally_skipped"])
             updated = BatchResult(
                 batch_id=current.batch_id,
                 batch_size=current.batch_size,
                 failures_intercepted=len(txns),
                 recovery_attempts=attempts,
                 recovered=rescued,
-                escalated=len(escalated),
+                escalated=max(len(escalated) - skipped, 0),
                 in_progress=len(in_progress),
                 recovery_rate=rate,
                 revenue_recovered=sum(txn.order.amount for txn in recovered),
-                revenue_at_risk=sum(txn.order.amount for txn in txns if is_active_recovery(txn.state)),
+                revenue_at_risk=sum(txn.order.amount for txn in txns),
                 complete=len(in_progress) == 0 and eligible == current.batch_size,
                 created_at=current.created_at,
                 transaction_ids=list(current.transaction_ids),
                 routing_summary=current.routing_summary,
+                net_revenue_protected=int(snap["net_revenue_protected"]),
+                intervention_cost=int(snap["intervention_cost_total"]),
+                intentionally_skipped=skipped,
+                agent_act=int(snap["agent_act"]),
+                agent_do_nothing=int(snap["agent_do_nothing"]),
+                agent_escalate=int(snap["agent_escalate"]),
+                revenue_leakage_total=int(snap["revenue_leakage_total"]),
+                baseline_recovered=int(snap["baseline_recovered"]),
+                incremental_value_protected=int(snap["incremental_value_protected"]),
+                cost_avoided_total=int(snap["cost_avoided_total"]),
+                leakage=[LeakageBreakdown(**row) for row in snap["leakage"]],
             )
             existing.payload = updated.model_dump(mode="json")
             return deepcopy(updated)
@@ -556,6 +572,9 @@ class DurableStore:
             best_route=most,
             predicted_failure_probability=predicted,
         )
+        from app.engine.economics import snapshot_metrics
+
+        snap = snapshot_metrics(txns)
         return TelemetryDashboard(
             total_failures_intercepted=len(eligible),
             total_transactions_rescued=rescued,
@@ -582,6 +601,17 @@ class DurableStore:
             tenant_id=tenant,
             intelligence=intelligence,
             recovery_queue_depth=queue_depth + len(held),
+            net_revenue_protected=int(snap["net_revenue_protected"]),
+            intervention_cost_total=int(snap["intervention_cost_total"]),
+            intentionally_skipped=int(snap["intentionally_skipped"]),
+            agent_act=int(snap["agent_act"]),
+            agent_do_nothing=int(snap["agent_do_nothing"]),
+            agent_escalate=int(snap["agent_escalate"]),
+            revenue_leakage_total=int(snap["revenue_leakage_total"]),
+            baseline_recovered=int(snap["baseline_recovered"]),
+            incremental_value_protected=int(snap["incremental_value_protected"]),
+            cost_avoided_total=int(snap["cost_avoided_total"]),
+            leakage=[LeakageBreakdown(**row) for row in snap["leakage"]],
         )
 
     async def get_idempotency(self, key: str, endpoint: str) -> dict | None:

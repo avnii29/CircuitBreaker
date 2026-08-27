@@ -48,7 +48,7 @@ jobs:
       - name: Production build
         run: npm run build
         env:
-          VITE_API_BASE_URL: https://circuitbreaker-api.onrender.com
+          VITE_API_BASE_URL: https://circuitbreaker-api.vercel.app
           VITE_API_KEY: test-write-key
 
   backend-image:

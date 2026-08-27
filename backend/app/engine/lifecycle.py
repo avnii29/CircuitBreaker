@@ -124,6 +124,17 @@ def build_transaction(
     email = payload.customer_email or f"{_slug(first)}@example.com"
     phone = payload.customer_phone or "9876543210"
     demo_scenario = (payload.demo_scenario or "").strip()
+    item_name = "Held cart reservation"
+    sku = "SKU_DEMO_01"
+    if demo_scenario == "CHECKOUT_ABANDONMENT":
+        item_name = "Abandoned checkout cart"
+        sku = "SKU_CART_01"
+    elif demo_scenario == "SUBSCRIPTION_FAILURE":
+        item_name = "Monthly subscription"
+        sku = "SKU_SUB_01"
+    elif demo_scenario == "OVERDUE_RECEIVABLE":
+        item_name = "Overdue invoice"
+        sku = "SKU_INV_01"
     return Transaction(
         transaction_id=txn_id,
         state=TransactionState.INITIATED,
@@ -138,8 +149,8 @@ def build_transaction(
             merchant_name="Northstar Stores",
             items=[
                 OrderItem(
-                    sku="SKU_DEMO_01",
-                    name="Held cart reservation",
+                    sku=sku,
+                    name=item_name,
                     quantity=1,
                     unit_amount=amount,
                 )
@@ -202,6 +213,7 @@ async def simulate_checkout(
     batch_id: str | None = None,
     auto_recover: bool = False,
     auto_recover_after: float | None = None,
+    supervise: bool = True,
 ) -> Transaction:
     from app.engine import worker
 
@@ -269,6 +281,8 @@ async def simulate_checkout(
     await enter_automated_loop(transaction.transaction_id)
     started = await store.get(transaction.transaction_id)
     delay = 6.0 if auto_recover_after is None else auto_recover_after
+    if not supervise:
+        return started or transaction
     if settings.WORKER_ENABLED:
         from app.engine.jobs import PRIORITY_REALTIME, enqueue
 
@@ -335,6 +349,41 @@ async def enter_automated_loop(transaction_id: str) -> Transaction | None:
             "simulated": True,
         },
     )
+
+    learned: dict = {}
+    try:
+        from app.engine.policy import learned_stats
+
+        learned = await learned_stats(transaction.routing.error_code)
+    except Exception:
+        learned = {}
+    from app.engine.economics import stamp_economics
+
+    economics = stamp_economics(transaction, learned=learned)
+    append_audit(
+        transaction,
+        action="INTERVENTION_EVALUATED",
+        actor=Actor.RECOVERY_ENGINE.value,
+        previous_state=TransactionState.AUTOMATED_LOOP,
+        new_state=TransactionState.AUTOMATED_LOOP,
+        metadata={
+            "selected_action": economics.get("selected_action"),
+            "selected_intervention": economics.get("selected_intervention"),
+            "net_expected_value": economics.get("net_expected_value"),
+            "expected_recovery_value": economics.get("expected_recovery_value"),
+            "intervention_cost": economics.get("intervention_cost"),
+            "event_type": economics.get("event_type"),
+            "simulated": True,
+        },
+        reason=str(economics.get("rationale") or "Intervention evaluated."),
+    )
+    if economics.get("selected_action") == "DO_NOTHING":
+        await store.upsert(transaction)
+        return await escalate_transaction(
+            transaction.transaction_id,
+            trigger="INTERVENTION_SKIPPED",
+            reason=str(economics.get("rationale") or "Expected recovery value did not justify intervention cost."),
+        )
 
     if classified["strategy"] == "HOLD" or classified["category"] == "CUSTOMER_FUNDS_FAILURE":
         blocked = GuardrailResult(
@@ -442,6 +491,20 @@ async def enter_automated_loop(transaction_id: str) -> Transaction | None:
         max_attempts=transaction.recovery.max_attempts,
     )
     if not policy["allowed"]:
+        from app.engine.economics import PAYMENT_FAILURE, event_type_for
+
+        simulated_act = (
+            economics.get("selected_action") == "ACT"
+            and event_type_for(transaction) != PAYMENT_FAILURE
+            and policy["code"] == "AMOUNT_LIMIT"
+        )
+        if simulated_act:
+            policy = {
+                "allowed": True,
+                "code": "OK",
+                "reason": "Simulated non-payment intervention is allowed above the card-rail amount limit.",
+            }
+    if not policy["allowed"]:
         transaction.smart_routing.policy_allowed = False
         transaction.smart_routing.policy_reason = policy["reason"]
         transaction.smart_routing.policy_blocked = True
@@ -507,6 +570,8 @@ async def enter_automated_loop(transaction_id: str) -> Transaction | None:
     result.output_message = validated
     transaction.recovery.guardrail = result
     transaction.recovery.customer_message = validated
+    if transaction.smart_routing and isinstance(transaction.smart_routing.economics, dict):
+        transaction.smart_routing.economics["guardrail_result"] = bool(result.passed)
     append_audit(
         transaction,
         action="GUARDRAIL_BLOCKED" if not result.passed else "GUARDRAIL_VALIDATED",

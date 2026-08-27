@@ -37,21 +37,21 @@ export function SimulationPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <p className="section-label !text-[#98A2B3]">Trigger a failure</p>
-            <span className="inline-flex items-center gap-1.5 rounded-md bg-white/10 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-success">
-              <span className="h-1.5 w-1.5 rounded-full bg-success" />
-              LIVE
-            </span>
+            <p className="section-label !text-[#98A2B3]">Live demo</p>
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-white/10 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-success">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            SIMULATED
+          </span>
           </div>
           <h2 className="mt-2 text-[22px] font-semibold tracking-tight">
-            Break a payment. Watch CircuitBreaker save it.
+            Run a revenue event. Watch the agent decide.
           </h2>
         </div>
       </div>
 
       <div className="mt-5 flex flex-wrap items-end gap-3">
         <label className="text-[12px] text-[#98A2B3]">
-          Failure type
+          Revenue event
           <select
             value={scenario}
             onChange={(event) => onScenario(event.target.value as DemoScenarioId)}
@@ -71,7 +71,7 @@ export function SimulationPanel({
           className="focus-ring inline-flex h-10 items-center gap-2 rounded-md bg-blue px-4 text-[14px] font-semibold text-white hover:bg-[#2448d6] disabled:opacity-50"
         >
           <PlayIcon />
-          {running ? "Simulating..." : "Simulate failure"}
+          {running ? "Simulating..." : "Run event"}
         </button>
         <button
           type="button"
@@ -87,12 +87,12 @@ export function SimulationPanel({
           onClick={onBatch}
           className="focus-ring h-10 rounded-md border border-white/25 bg-transparent px-4 text-[13px] font-semibold text-white hover:bg-white/5 disabled:opacity-50"
         >
-          {busy === "batch" ? "Simulating..." : "Batch 50"}
+          {busy === "batch" || busy === "live-demo" ? "Simulating..." : "Run batch"}
         </button>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-[12px] text-[#98A2B3]">Simulated rails only. No real payments.</p>
+        <p className="text-[12px] text-[#98A2B3]">Simulated interventions only. No real money movement.</p>
         {!confirmReset ? (
           <button
             type="button"

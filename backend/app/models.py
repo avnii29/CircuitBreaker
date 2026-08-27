@@ -212,6 +212,7 @@ class SmartRoutingState(BaseModel):
     learned_score_source: str = ""
     last_decision: Optional[dict[str, Any]] = None
     policy_version: str = ""
+    economics: Optional[dict[str, Any]] = None
 
 
 class AuditEvent(BaseModel):
@@ -266,7 +267,8 @@ class ExecuteRecoveryRequest(BaseModel):
 
 
 class SimulateBatchRequest(BaseModel):
-    count: int = Field(default=50, ge=1, le=200)
+    count: int = Field(default=20, ge=1, le=50)
+    recover: bool = True
 
 
 class RoutingSummary(BaseModel):
@@ -280,6 +282,11 @@ class RoutingSummary(BaseModel):
     revenue_recovered: int = 0
     revenue_at_risk: int = 0
     most_effective_route: Optional[str] = None
+    net_revenue_protected: int = 0
+    intervention_cost: int = 0
+    intentionally_skipped: int = 0
+    baseline_recovered: int = 0
+    incremental_value_protected: int = 0
 
 
 class RunRecoverySimulationResponse(BaseModel):
@@ -287,6 +294,13 @@ class RunRecoverySimulationResponse(BaseModel):
     recover: list[str] = Field(default_factory=list)
     escalate: list[str] = Field(default_factory=list)
     summary: Optional[RoutingSummary] = None
+
+
+class LeakageBreakdown(BaseModel):
+    event_type: str
+    count: int = 0
+    amount: int = 0
+    recovered: int = 0
 
 
 class BatchResult(BaseModel):
@@ -304,6 +318,17 @@ class BatchResult(BaseModel):
     created_at: datetime
     transaction_ids: list[str] = Field(default_factory=list)
     routing_summary: Optional[RoutingSummary] = None
+    net_revenue_protected: int = 0
+    intervention_cost: int = 0
+    intentionally_skipped: int = 0
+    agent_act: int = 0
+    agent_do_nothing: int = 0
+    agent_escalate: int = 0
+    revenue_leakage_total: int = 0
+    baseline_recovered: int = 0
+    incremental_value_protected: int = 0
+    cost_avoided_total: int = 0
+    leakage: list[LeakageBreakdown] = Field(default_factory=list)
 
 
 class RoutingDashboardStats(BaseModel):
@@ -395,6 +420,17 @@ class TelemetryDashboard(BaseModel):
     tenant_id: Optional[str] = None
     intelligence: IntelligenceTelemetry = Field(default_factory=IntelligenceTelemetry)
     recovery_queue_depth: int = 0
+    net_revenue_protected: int = 0
+    intervention_cost_total: int = 0
+    intentionally_skipped: int = 0
+    agent_act: int = 0
+    agent_do_nothing: int = 0
+    agent_escalate: int = 0
+    revenue_leakage_total: int = 0
+    baseline_recovered: int = 0
+    incremental_value_protected: int = 0
+    cost_avoided_total: int = 0
+    leakage: list[LeakageBreakdown] = Field(default_factory=list)
 
 
 class ExecuteRecoveryResponse(BaseModel):

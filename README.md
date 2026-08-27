@@ -1,10 +1,13 @@
 # CircuitBreaker
 
-CircuitBreaker is a payment-failure recovery service. When a checkout fails because a simulated bank rail is unavailable, times out, or is blocked, the engine retries, reroutes, holds, or escalates the transaction so the original payment intent is preserved.
+CircuitBreaker is an AI revenue recovery engine.
 
-Bank rails and checkouts are simulated. The runtime is a durable service: FastAPI, PostgreSQL, Redis, authentication, idempotency, circuit breakers, adaptive routing, and audit logging.
+It finds revenue slipping away, explains why, chooses the highest-value safe intervention, executes it, and measures net revenue protected. Payment failure recovery is the first capability. The same decision pipeline also handles checkout abandonment, subscription failure, and overdue receivables in simulation.
 
-Live dashboard: https://circuitbreaker-nine.vercel.app/
+Bank rails, messages, and recoveries are simulated. No real money moves.
+
+Live dashboard: https://circuitbreaker-nine.vercel.app
+Live API: https://circuitbreaker-api.vercel.app
 
 ## Architecture
 
@@ -20,18 +23,30 @@ Live dashboard: https://circuitbreaker-nine.vercel.app/
                            v
                   +------------------+
                   |   FastAPI API    |
-                  |     Render       |
-                  +------+-----+-----+
-                         |     |
-                +--------+     +--------+
-                v                       v
-        +--------------+        +--------------+
-        | PostgreSQL   |        |    Redis     |
-        | Managed DB   |        | Managed Redis|
-        +--------------+        +--------------+
+                  |     Vercel       |
+                  +------------------+
 ```
 
-Local development uses the same shape with Docker Compose: React (or Vite) to FastAPI to PostgreSQL and Redis.
+The public demo runs entirely on Vercel. It does not need this laptop, localhost, Docker, or a tunnel.
+
+Local development can still use Docker Compose or Vite plus uvicorn.
+
+## Product loop
+
+```text
+Revenue event
+  -> revenue at risk
+  -> root cause
+  -> candidate interventions
+  -> economic evaluation
+  -> guardrails
+  -> ACT / DO NOTHING / ESCALATE
+  -> recover
+  -> measure
+  -> learn
+```
+
+The engine optimizes net revenue protected (recovered amount minus simulated intervention cost), not just payment success.
 
 ## Local development
 
@@ -46,8 +61,6 @@ docker compose up --build
 - API: http://localhost:8000
 - OpenAPI: http://localhost:8000/docs
 
-Compose runs `alembic upgrade head` before the API starts. Postgres is the datastore. SQLite is only for local unit tests and single-process uvicorn.
-
 ### API without Compose
 
 ```bash
@@ -58,86 +71,81 @@ cp backend/.env.example backend/.env
 cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Required environment is documented in `backend/.env.example`. There is no default database URL or API key in code.
-
 ### Dashboard without Compose
 
 ```bash
 cp frontend/.env.example frontend/.env
-# set VITE_API_BASE_URL and VITE_API_KEY to match the API
+# set VITE_API_BASE_URL and VITE_API_KEY to match the local API
 cd frontend && npm install && npm run dev
 ```
 
 Mutating and read APIs require `X-API-Key`.
 
-## Production deployment
+## Production (current)
 
-Chosen target:
+Public hosting:
 
-- Frontend: Vercel (`frontend/`)
-- Backend: Render Docker web service (`render.yaml`)
-- Database: Render managed PostgreSQL
-- Cache: Render Key Value (Redis-compatible)
+- Frontend Vercel project: `circuitbreaker` -> https://circuitbreaker-nine.vercel.app
+- API Vercel project: `circuitbreaker-api` -> https://circuitbreaker-api.vercel.app
 
-Do not deploy SQLite. Do not use `CORS_ORIGINS=*`. Do not connect real payment rails.
-
-### Backend (Render)
-
-1. Push this repository to GitHub.
-2. Create a Render Blueprint from `render.yaml`, or create a Docker web service with context `backend/`.
-3. Set the sync-false environment variables in the Render dashboard using placeholders from `deploy/production.env.example`.
-4. Set `CORS_ORIGINS` to the Vercel origin, for example `https://<project>.vercel.app`.
-5. Set `DATABASE_SSL=true`. Leave `AUTO_CREATE_SCHEMA=false` so schema changes go through Alembic.
-6. Deploy. The container entrypoint runs `alembic upgrade head`, then starts uvicorn on `0.0.0.0:$PORT`.
-7. Confirm `GET /health/ready` returns 200 before sending dashboard traffic.
-
-Render health check path: `/health/ready`.
-
-### Frontend (Vercel)
-
-1. Import the GitHub repository in Vercel.
-2. Set Root Directory to `frontend`.
-3. Set:
+Frontend production environment:
 
 ```text
-VITE_API_BASE_URL=https://<render-api-host>
+VITE_API_BASE_URL=https://circuitbreaker-api.vercel.app
 VITE_API_KEY=<same write key as the API>
 ```
 
-4. Deploy. The dashboard talks to the live API over HTTPS and uses real telemetry, not mock transactions.
-
-The demo write key is visible in the browser bundle by design so the public dashboard can simulate checkouts. Rotate it after the hackathon.
-
-### Demo failure injection
-
-Use the dashboard simulation panel, or `POST /api/v1/payments/simulate-checkout` with `scenario`:
+API production environment (see `deploy/production.env.example`):
 
 ```text
-TRANSIENT_FAILURE
-BANK_OUTAGE
-HARD_DECLINE
-RISK_BLOCK
+DATABASE_URL=sqlite+aiosqlite:////tmp/circuitbreaker.db
+AUTO_CREATE_SCHEMA=true
+API_KEY_READ=...
+API_KEY_WRITE=...
+CORS_ORIGINS=https://circuitbreaker-nine.vercel.app
+CORS_ORIGIN_REGEX=https://.*\.vercel\.app
+DEMO_MODE=true
+WORKER_ENABLED=false
+LLM_PROVIDER=simulated
 ```
 
-These map onto the existing simulated rails. There is no real bank or UPI switch.
+Do not set `VITE_API_BASE_URL` to localhost, 127.0.0.1, or 0.0.0.0 in a production build.
+
+The dashboard `/api/*` paths also rewrite to the hosted API so same-origin calls work.
+
+The demo write key is visible in the browser bundle so the public dashboard can run simulations. Rotate it after the hackathon.
+
+Optional longer-running Postgres/Redis hosting is described in `render.yaml` and `docker-compose.yml`. The live demo does not depend on them.
+
+## Demo
+
+Open the dashboard and click Start live demo.
+
+That resets the store, creates a deterministic mix of revenue events, runs recovery, and shows:
+
+- revenue at risk
+- recovered revenue
+- net revenue protected
+- ACT / DO NOTHING / ESCALATE
+- simulated baseline vs simulated intervention
+
+Single scenarios (payment outage, checkout abandonment, subscription failure, overdue receivable, low-value skip) are on the Recovery page.
 
 ## Environment variables
 
-See:
-
 - `.env.example` for Docker Compose
 - `backend/.env.example` for local uvicorn
-- `frontend/.env.example` for Vite
-- `deploy/production.env.example` for Render / Vercel
+- `frontend/.env.example` for local Vite
+- `deploy/production.env.example` for Vercel
 
 Never commit `.env` or real secrets.
 
-## API documentation
+## API
 
-FastAPI OpenAPI UI:
+OpenAPI:
 
 - Local: http://localhost:8000/docs
-- Production: `https://<api-host>/docs`
+- Production: https://circuitbreaker-api.vercel.app/docs
 
 Health:
 
@@ -149,7 +157,7 @@ GET /health/live
 GET /health/ready
 ```
 
-Liveness is process-alive. Readiness checks PostgreSQL, and Redis when `REDIS_URL` is set.
+v1 contracts stay compatible. Breaking changes go under `/api/v2/`.
 
 ## Checks
 
@@ -158,20 +166,4 @@ cd backend && pytest -q && ruff check app tests
 cd frontend && npm run build
 ```
 
-CI runs lint, unit/integration tests, the frontend production build, and the backend Docker image build. A failed CI run must not be deployed.
-
-## Live demo
-
-- Dashboard: set after the Vercel project is connected
-- API: set after the Render service is live
-- OpenAPI: `https://<api-host>/docs`
-
-## Notes
-
-- Cart hold SLA defaults to 180s (`MAX_CART_HOLD_SECONDS` / `RECOVERY_WINDOW_SECONDS`). Demo mode compresses that window.
-- Rails trip OPEN above a 30% failure rate in a 60s window, or earlier on a z-score spike (`GET /api/v1/payments/telemetry-dashboard` -> `circuit_breakers`).
-- Escalations are listed at `GET /api/v1/payments/manual-review-queue`.
-- Adaptive policy: `GET /api/v2/policy`, rollback `POST /api/v2/policy/rollback/{version}`.
-- Job priority: realtime recovery > batch > retrain. Set `WORKER_ENABLED=true` and `REDIS_URL` in production.
-- `/metrics` is Prometheus.
-- Breaking response changes go under `/api/v2/...`; v1 remains mounted.
+CI runs lint, tests, the frontend production build, and the backend Docker image build.

@@ -1,5 +1,7 @@
 {
   "rewrites": [
+    { "source": "/api/:path*", "destination": "https://circuitbreaker-api.vercel.app/api/:path*" },
+    { "source": "/health/:path*", "destination": "https://circuitbreaker-api.vercel.app/health/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

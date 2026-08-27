@@ -4,8 +4,9 @@ import { isActiveRecovery } from "../types";
 import { ArrowIcon, StatusPill } from "./StatusPill";
 import { StateMachine } from "./StateMachine";
 import { AuditTimeline } from "./AuditTimeline";
-import { formatCountdown, formatINR, cx } from "../lib/format";
+import { formatCountdown, formatINR, formatPercent, cx } from "../lib/format";
 import { useNow } from "../hooks/useAnimatedNumber";
+import { actionLabel, economicsOf, eventLabel } from "../lib/economics";
 
 function remaining(expiresAt: string, now: number): number {
   return Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 1000));
@@ -32,6 +33,7 @@ export function TransactionInspector({
   const [copied, setCopied] = useState(false);
   const [whyOpen, setWhyOpen] = useState(false);
   const [evalPhase, setEvalPhase] = useState<"idle" | "evaluating" | "counted" | "selected">("idle");
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   if (!transaction) {
     return (
@@ -39,7 +41,7 @@ export function TransactionInspector({
         <div className="max-w-sm text-center">
           <p className="section-label">What CircuitBreaker is doing</p>
           <p className="mt-4 text-[16px] font-medium text-navy">
-            Trigger a payment failure to watch the system save it
+            Trigger a revenue event to watch the agent decide
           </p>
           <p className="mt-2 text-[13px] leading-5 text-secondary">
             The diagnosis, chosen action, and outcome appear here as the engine runs.
@@ -84,7 +86,7 @@ export function TransactionInspector({
       <header className="border-b border-[rgba(15,40,50,0.08)] px-6 py-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="section-label">This payment</p>
+            <p className="section-label">Revenue event</p>
             <p className="mt-2 font-mono text-[15px] font-semibold tracking-wide text-navy">
               {transaction.transaction_id}
             </p>
@@ -102,6 +104,8 @@ export function TransactionInspector({
       </header>
 
       <div className="custom-scroll flex-1 space-y-6 overflow-y-auto px-6 py-6">
+        <EconomicsPanel transaction={transaction} recovered={recovered} escalated={escalated} />
+
         {recovered && (
           <div className="success-in rounded-card border border-[rgba(0,179,104,0.25)] bg-[#F3FBF7] px-4 py-3">
             <p className="text-[13px] font-semibold text-success">Payment recovered</p>
@@ -114,14 +118,19 @@ export function TransactionInspector({
         {escalated && (
           <div className="rounded-card border border-[rgba(102,112,133,0.25)] bg-[#F7F8FA] px-4 py-3">
             <p className="text-[13px] font-semibold text-secondary">
-              {policyBlocked ? "AUTOMATED RECOVERY BLOCKED" : "Recovery stopped"}
+              {economicsOf(transaction)?.selected_action === "DO_NOTHING"
+                ? "Recovery intentionally skipped"
+                : policyBlocked
+                  ? "AUTOMATED RECOVERY BLOCKED"
+                  : "Recovery stopped"}
             </p>
             <p className="mt-1 text-[13px] text-secondary">
-              {policyBlocked
+              {economicsOf(transaction)?.selected_action === "DO_NOTHING"
+                ? economicsOf(transaction)?.rationale
+                : policyBlocked
                 ? smart?.policy_reason || "Transaction exceeds automated recovery policy limit."
                 : "Automated recovery stopped safely. Cart released. Human review required."}
             </p>
-            {policyBlocked && <p className="mt-1 text-[12px] font-semibold text-secondary">Status: ESCALATED</p>}
           </div>
         )}
 
@@ -134,6 +143,28 @@ export function TransactionInspector({
           </div>
         )}
 
+        {looping && (
+          <button
+            type="button"
+            disabled={selecting || executing || recovering}
+            onClick={() => (onExecuteRoute ?? onRecover)(transaction.transaction_id)}
+            className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue px-4 py-3 text-[14px] font-semibold text-white hover:bg-[#2448d6] disabled:opacity-50"
+          >
+            {executing || recovering ? "Executing..." : "Execute recovery"}
+            {!(executing || recovering) && <ArrowIcon />}
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setDetailsOpen((value) => !value)}
+          className="text-[12px] font-semibold text-blue"
+        >
+          {detailsOpen ? "Hide decision details" : "View decision details"}
+        </button>
+
+        {detailsOpen && (
+          <>
         <div className="grid gap-6 lg:grid-cols-[160px_1fr]">
           <div>
             <p className="section-label mb-4">Lifecycle</p>
@@ -206,9 +237,6 @@ export function TransactionInspector({
         </p>
 
         <Separator title="AI recovery message" />
-        <p className="text-[11px] font-semibold tracking-[0.12em] text-secondary">
-          {transaction.recovery.message_language || "Hinglish"} · {transaction.recovery.message_channel || "WHATSAPP_SIMULATION"}
-        </p>
         <p className="rounded-card bg-[#F5F8FB] px-4 py-3 text-[14px] leading-6 text-ink">
           {transaction.recovery.customer_message || "Message will appear when recovery starts."}
         </p>
@@ -236,8 +264,94 @@ export function TransactionInspector({
 
         <Separator title="Recovery timeline" />
         <AuditTimeline events={transaction.audit_trail} />
+          </>
+        )}
       </div>
     </section>
+  );
+}
+
+function EconomicsPanel({
+  transaction,
+  recovered,
+  escalated,
+}: {
+  transaction: Transaction;
+  recovered: boolean;
+  escalated: boolean;
+}) {
+  const econ = economicsOf(transaction);
+  if (!econ) {
+    return (
+      <div className="rounded-card border border-[rgba(15,40,50,0.08)] bg-[#F8FAFC] px-4 py-3">
+        <p className="text-[13px] text-secondary">Intervention economics will appear once the agent evaluates this event.</p>
+      </div>
+    );
+  }
+  const selected = econ.candidates.find((row) => row.id === econ.selected_intervention);
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="section-label">Revenue at risk</p>
+        <p className="mt-2 tabular text-[32px] font-semibold tracking-tight text-navy">{formatINR(econ.revenue_at_risk)}</p>
+        <p className="mt-1 text-[13px] text-secondary">
+          {eventLabel(econ.event_type)} · Predicted loss {formatPercent(econ.predicted_loss_probability)}
+        </p>
+      </div>
+      <div>
+        <p className="section-label">Root cause</p>
+        <p className="mt-2 text-[14px] leading-6 text-ink">{econ.root_cause}</p>
+      </div>
+      <div>
+        <p className="section-label">Options considered</p>
+        <p className="mt-1 text-[11px] text-secondary">SIMULATED probabilities and intervention costs</p>
+        <ul className="mt-3 space-y-2">
+          {econ.candidates.slice(0, 4).map((row) => (
+            <li
+              key={row.id}
+              className={cx(
+                "flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-[13px]",
+                row.id === econ.selected_intervention ? "border-blue/30 bg-[#F5F8FF]" : "border-[rgba(15,40,50,0.08)]",
+              )}
+            >
+              <span className="font-medium text-navy">{row.label}</span>
+              <span className="tabular text-secondary">
+                {formatPercent(row.predicted_success_probability)} · {formatINR(row.expected_recovery_value)} EV
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="rounded-card border border-[rgba(15,40,50,0.08)] px-4 py-3">
+        <p className="section-label">Agent decision</p>
+        <p className="mt-2 text-[18px] font-semibold text-navy">
+          {actionLabel(econ.selected_action)}
+          {selected ? ` · ${selected.label}` : ""}
+        </p>
+        <p className="mt-2 text-[13px] leading-6 text-secondary">{econ.rationale}</p>
+        <p className="mt-2 text-[12px] text-secondary">
+          Expected ₹{econ.expected_recovery_value.toLocaleString("en-IN")} · Simulated cost ₹{econ.intervention_cost}
+          {econ.selected_action === "DO_NOTHING" && econ.cost_avoided
+            ? ` · Unnecessary cost avoided ₹${econ.cost_avoided}`
+            : ""}
+        </p>
+      </div>
+      {recovered && (
+        <div className="rounded-card border border-[rgba(0,179,104,0.25)] bg-[#F3FBF7] px-4 py-3">
+          <p className="text-[13px] font-semibold text-success">
+            Result · {formatINR(econ.actual_recovered || transaction.money_recovered || transaction.order.amount)} recovered
+          </p>
+          <p className="mt-1 text-[12px] text-secondary">
+            Counterfactual (simulated): without intervention estimated ₹{econ.counterfactual.without_expected.toLocaleString("en-IN")} recovered naturally.
+          </p>
+        </div>
+      )}
+      {escalated && econ.selected_action === "DO_NOTHING" && (
+        <p className="text-[12px] text-secondary">
+          Estimated unnecessary intervention cost avoided: {formatINR(econ.cost_avoided || econ.intervention_cost || 0)}
+        </p>
+      )}
+    </div>
   );
 }
 

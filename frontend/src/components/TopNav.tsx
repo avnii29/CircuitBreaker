@@ -1,12 +1,21 @@
 import type { PageId } from "../types";
 import { BrandName, CircuitMark } from "./StatusPill";
 import { cx } from "../lib/format";
+import type { ConnectionState } from "../api/client";
 
 const LINKS: { id: PageId; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "recovery", label: "Recovery" },
   { id: "transactions", label: "Transactions" },
 ];
+
+const CONNECTION_COPY: Record<ConnectionState, { label: string; tone: string }> = {
+  CONNECTED: { label: "ENGINE ONLINE", tone: "text-success" },
+  CONNECTING: { label: "CONNECTING", tone: "text-secondary" },
+  RECONNECTING: { label: "RECONNECTING", tone: "text-warning" },
+  DEGRADED: { label: "RECONNECTING", tone: "text-warning" },
+  UNAVAILABLE: { label: "UNAVAILABLE", tone: "text-danger" },
+};
 
 export function DemoBanner({
   demoMode,
@@ -21,7 +30,7 @@ export function DemoBanner({
         <p>
           <span className="font-semibold tracking-[0.12em] text-navy">DEMO ENVIRONMENT</span>
           <span className="mx-2 text-muted">·</span>
-          Simulated bank failures · No real payments processed
+          Simulated revenue recovery · No real money movement
         </p>
         {demoMode && (
           <p className="font-medium text-navy">
@@ -36,18 +45,21 @@ export function DemoBanner({
 export function TopNav({
   page,
   onPage,
-  offline,
+  connection,
+  onRetry,
   tenants,
   tenantId,
   onTenant,
 }: {
   page: PageId;
   onPage: (page: PageId) => void;
-  offline: boolean;
+  connection: ConnectionState;
+  onRetry: () => void;
   tenants: string[];
   tenantId: string;
   onTenant: (tenantId: string) => void;
 }) {
+  const status = CONNECTION_COPY[connection];
   return (
     <header className="sticky top-0 z-30 h-16 border-b border-[rgba(15,40,50,0.08)] bg-white">
       <div className="mx-auto flex h-full max-w-[1440px] items-center justify-between gap-6 px-6 lg:px-10">
@@ -92,12 +104,24 @@ export function TopNav({
               </select>
             </label>
           )}
-          {offline ? (
-            <span className="inline-flex items-center gap-1.5 font-medium text-danger">
-              <span className="h-1.5 w-1.5 rounded-full bg-danger" />
-              BACKEND OFFLINE
-            </span>
-          ) : null}
+          <span className={cx("inline-flex items-center gap-1.5 font-medium", status.tone)}>
+            <span
+              className={cx(
+                "h-1.5 w-1.5 rounded-full",
+                connection === "CONNECTED" ? "bg-success" : connection === "UNAVAILABLE" ? "bg-danger" : "bg-warning",
+              )}
+            />
+            {status.label}
+          </span>
+          {connection !== "CONNECTED" && connection !== "CONNECTING" && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="rounded-md border border-[rgba(15,40,50,0.12)] px-2 py-1 text-[11px] font-semibold text-navy"
+            >
+              Retry
+            </button>
+          )}
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#EEF2F6] text-[11px] font-semibold text-navy">
             CB
           </span>

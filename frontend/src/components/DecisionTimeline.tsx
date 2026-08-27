@@ -27,6 +27,24 @@ function splitField(line: string): { label: string; value: string } {
 }
 
 function stepsFrom(transaction: Transaction, events: AuditEvent[]): string[] {
+  const economics = transaction.smart_routing?.economics;
+  if (economics && typeof economics === "object" && "rationale" in economics) {
+    const rationale = String(economics.rationale || "");
+    const action = String(economics.selected_action || "");
+    const lines = [
+      `Revenue at risk: ${formatINR(Number(economics.revenue_at_risk || transaction.order.amount))}`,
+      `Root cause: ${String(economics.root_cause || transaction.routing.diagnosis || "-")}`,
+      `Decision: ${action || "-"}`,
+    ];
+    if (rationale) lines.push(`Why: ${rationale}`);
+    if (action === "DO_NOTHING") {
+      lines.push(`Estimated cost avoided: ${formatINR(Number(economics.cost_avoided || 0))}`);
+    }
+    if (transaction.state === "RECOVERED") {
+      lines.push(`Outcome: RECOVERED · ${formatINR(transaction.money_recovered || transaction.order.amount)}`);
+    }
+    return lines;
+  }
   const decision = transaction.smart_routing?.last_decision;
   const reason = typeof decision?.reason === "string" ? decision.reason : "";
   if (reason.includes("Decision:")) {

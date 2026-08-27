@@ -18,6 +18,7 @@ from app.models import (
     ExecuteRecoveryResponse,
     ExecuteSelectedRouteResponse,
     HealthResponse,
+    LeakageBreakdown,
     RunRecoverySimulationResponse,
     SelectRecoveryRouteResponse,
     SimulateBatchRequest,
@@ -33,6 +34,11 @@ from app.security.ratelimit import limit_checkout, limit_recovery
 from app.store import fingerprint_payload, store
 
 logger = logging.getLogger("circuitbreaker.payments")
+
+
+def _compact_transaction(transaction: Transaction) -> Transaction:
+    trail = transaction.audit_trail[-4:] if len(transaction.audit_trail) > 4 else transaction.audit_trail
+    return transaction.model_copy(update={"audit_trail": trail})
 
 router = APIRouter(dependencies=[Depends(require_read)])
 
@@ -126,11 +132,19 @@ async def execute_recovery_action(
 
 @router.get("/telemetry-dashboard", response_model=TelemetryDashboard)
 async def telemetry_dashboard() -> TelemetryDashboard:
-    return await store.telemetry(
-        demo_mode=settings.DEMO_MODE,
-        recovery_window_seconds=settings.recovery_window_seconds,
-        heartbeat=utcnow(),
-    )
+    try:
+        return await store.telemetry(
+            demo_mode=settings.DEMO_MODE,
+            recovery_window_seconds=settings.recovery_window_seconds,
+            heartbeat=utcnow(),
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Recovery service is temporarily unavailable.",
+        )
 
 
 @router.get("/manual-review-queue", response_model=list[Transaction])
@@ -144,7 +158,15 @@ async def manual_review_queue(tenant_id: str | None = None) -> list[Transaction]
 
 @router.get("/transactions", response_model=list[Transaction])
 async def list_transactions() -> list[Transaction]:
-    return await store.list_all()
+    try:
+        return [_compact_transaction(txn) for txn in await store.list_all()]
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Recovery service is temporarily unavailable.",
+        )
 
 
 @router.get("/transactions/{transaction_id}/audit-log", response_model=list[AuditEvent])
@@ -178,7 +200,8 @@ async def simulate_batch_endpoint(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Backpressure: batch traffic shed. Real-time recovery is prioritized over batch jobs and retraining.",
         )
-    count = body.count if body and body.count > 0 else 50
+    count = body.count if body and body.count > 0 else 20
+    recover = True if body is None else bool(body.recover)
     batch_id = f"BATCH_{secrets.token_hex(3).upper()}"
     spec = build_batch_spec(count)
     created: list[Transaction] = []
@@ -194,32 +217,62 @@ async def simulate_batch_endpoint(
                 merchant_id="MERCHANT_001",
                 auto_recover=False,
                 force_route_failure=bool(item["force_route_failure"]),
+                demo_scenario=item.get("demo_scenario") or None,
             ),
             background,
             batch_id=batch_id,
             auto_recover=False,
+            supervise=not recover,
         )
         created.append(transaction)
+    if recover:
+        from app.engine import worker
+
+        looping_ids = [txn.transaction_id for txn in created if is_active_recovery(txn.state)]
+        if looping_ids:
+            await worker.run_recovery_simulation(looping_ids)
+        refreshed: list[Transaction] = []
+        for txn in created:
+            current = await store.get(txn.transaction_id)
+            refreshed.append(current or txn)
+        created = refreshed
     now = datetime.now(timezone.utc)
     looping = [txn for txn in created if is_active_recovery(txn.state)]
     escalated = [txn for txn in created if txn.state == TransactionState.ESCALATED]
+    recovered_rows = [txn for txn in created if txn.state == TransactionState.RECOVERED]
+    from app.engine.economics import snapshot_metrics
+
+    snap = snapshot_metrics(created)
+    skipped = int(snap["intentionally_skipped"])
+    recovered_amount = sum(int(txn.order.amount) for txn in recovered_rows)
     batch = BatchResult(
         batch_id=batch_id,
         batch_size=count,
         failures_intercepted=len(created),
-        recovery_attempts=0,
-        recovered=0,
-        escalated=len(escalated),
+        recovery_attempts=len(recovered_rows) + max(len(escalated) - skipped, 0),
+        recovered=len(recovered_rows),
+        escalated=max(len(escalated) - skipped, 0),
         in_progress=len(looping),
-        recovery_rate=0.0,
-        revenue_recovered=0,
-        revenue_at_risk=sum(txn.order.amount for txn in looping),
-        complete=False,
+        recovery_rate=round((len(recovered_rows) / max(len(created), 1)) * 100, 1),
+        revenue_recovered=recovered_amount,
+        revenue_at_risk=sum(int(txn.order.amount) for txn in created),
+        complete=len(looping) == 0,
         created_at=now,
         transaction_ids=[txn.transaction_id for txn in created],
+        net_revenue_protected=int(snap["net_revenue_protected"]),
+        intervention_cost=int(snap["intervention_cost_total"]),
+        intentionally_skipped=skipped,
+        agent_act=int(snap["agent_act"]),
+        agent_do_nothing=int(snap["agent_do_nothing"]),
+        agent_escalate=int(snap["agent_escalate"]),
+        revenue_leakage_total=int(snap["revenue_leakage_total"]),
+        baseline_recovered=int(snap["baseline_recovered"]),
+        incremental_value_protected=int(snap["incremental_value_protected"]),
+        cost_avoided_total=int(snap["cost_avoided_total"]),
+        leakage=[LeakageBreakdown(**row) for row in snap["leakage"]],
     )
     await store.save_batch(batch)
-    return {"batch": batch, "transactions": created}
+    return {"batch": batch, "transactions": [_compact_transaction(txn) for txn in created]}
 
 
 @router.post(
@@ -242,17 +295,17 @@ async def execute_selected_route_endpoint(request: Request, transaction_id: str)
 
 
 @router.post("/run-recovery-simulation", response_model=RunRecoverySimulationResponse, dependencies=[Depends(require_write)])
-async def run_recovery_simulation_endpoint(background: BackgroundTasks) -> RunRecoverySimulationResponse:
+async def run_recovery_simulation_endpoint() -> RunRecoverySimulationResponse:
     from app.engine import worker
 
     looping = [txn for txn in await store.list_all() if is_active_recovery(txn.state)]
     if not looping:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No transactions are currently in automated recovery.",
+            detail="No open recoveries to run. Start a revenue event first.",
         )
     selected = [txn.transaction_id for txn in looping]
-    background.add_task(worker.run_recovery_simulation, selected)
+    await worker.run_recovery_simulation(selected)
     return RunRecoverySimulationResponse(selected=selected)
 
 
@@ -286,7 +339,7 @@ async def payments_health() -> HealthResponse:
 
 @router.get("", response_model=list[Transaction])
 async def list_payments() -> list[Transaction]:
-    return await store.list_all()
+    return [_compact_transaction(txn) for txn in await store.list_all()]
 
 
 @router.get("/{transaction_id}", response_model=Transaction)

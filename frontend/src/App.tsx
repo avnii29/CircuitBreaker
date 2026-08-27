@@ -1,24 +1,17 @@
 import { useEffect, useState } from "react";
-import { TopNav } from "./components/TopNav";
+import { DemoBanner, TopNav } from "./components/TopNav";
 import { OverviewPage } from "./pages/OverviewPage";
 import { RecoveryPage } from "./pages/RecoveryPage";
 import { TransactionsPage } from "./pages/TransactionsPage";
 import { useCircuitBreaker } from "./hooks/useCircuitBreaker";
 import type { PageId } from "./types";
-import { api, setTenantHeader } from "./api/client";
+import { setTenantHeader } from "./api/client";
 
 export default function App() {
   const state = useCircuitBreaker();
   const [page, setPage] = useState<PageId>("overview");
-  const [tenants, setTenants] = useState<string[]>([]);
   const [tenantId, setTenantId] = useState("");
-
-  useEffect(() => {
-    void api
-      .tenants()
-      .then((payload) => setTenants(payload.tenants))
-      .catch(() => setTenants([]));
-  }, []);
+  const tenants: string[] = [];
 
   useEffect(() => {
     setTenantHeader(tenantId);
@@ -34,10 +27,15 @@ export default function App() {
       <TopNav
         page={page}
         onPage={setPage}
-        offline={state.offline}
+        connection={state.connection}
+        onRetry={() => void state.reconnect()}
         tenants={tenants}
         tenantId={tenantId}
         onTenant={setTenantId}
+      />
+      <DemoBanner
+        demoMode={state.telemetry?.demo_mode ?? state.health?.demo_mode ?? true}
+        windowSeconds={state.telemetry?.recovery_window_seconds ?? state.health?.recovery_window_seconds ?? 30}
       />
       <main className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-10 lg:py-10">
         {page === "overview" && (

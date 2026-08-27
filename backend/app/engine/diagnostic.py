@@ -105,6 +105,36 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         "default_amount": 1799,
         "default_bank": "SBI",
     },
+    "CHECKOUT": {
+        "error_code": "ERR_CHECKOUT_ABANDONED",
+        "error_label": "Checkout abandoned",
+        "diagnosis": "Revenue is at risk because the customer left checkout before paying.",
+        "recommendation": "Send a simulated customer reminder",
+        "confidence": 88.0,
+        "reason_hinglish": "checkout abandoned",
+        "default_amount": 7200,
+        "default_bank": "HDFC",
+    },
+    "SUBSCRIPTION": {
+        "error_code": "ERR_SUBSCRIPTION_TIMEOUT",
+        "error_label": "Subscription renewal failed",
+        "diagnosis": "Recurring charge failed because the bank timed out.",
+        "recommendation": "Retry on an alternate rail before the window closes",
+        "confidence": 90.4,
+        "reason_hinglish": "subscription bank timeout",
+        "default_amount": 1499,
+        "default_bank": "SBI",
+    },
+    "OVERDUE": {
+        "error_code": "ERR_INVOICE_OVERDUE",
+        "error_label": "Invoice overdue",
+        "diagnosis": "An invoice is overdue and collection follow-up is the highest-value simulated intervention.",
+        "recommendation": "Simulate a collection follow-up",
+        "confidence": 76.0,
+        "reason_hinglish": "invoice overdue",
+        "default_amount": 80000,
+        "default_bank": "HDFC",
+    },
 }
 
 ERROR_CATALOG = {
@@ -135,6 +165,9 @@ SCENARIO_ALIASES = {
     "HARD_DECLINE": "FUNDS",
     "INSUFFICIENT_FUNDS": "FUNDS",
     "RISK_BLOCK": "RISK",
+    "CHECKOUT_ABANDONMENT": "CHECKOUT",
+    "SUBSCRIPTION_FAILURE": "SUBSCRIPTION",
+    "OVERDUE_RECEIVABLE": "OVERDUE",
 }
 
 

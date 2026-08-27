@@ -166,7 +166,10 @@
             "ERR_INSUFFICIENT_FUNDS",
             "ERR_FRAUD_SUSPECTED",
             "ERR_RISK_BLOCK",
-            "ERR_BANK_DOWN"
+            "ERR_BANK_DOWN",
+            "ERR_CHECKOUT_ABANDONED",
+            "ERR_SUBSCRIPTION_TIMEOUT",
+            "ERR_INVOICE_OVERDUE"
           ]
         },
         "error_label": { "type": "string" },

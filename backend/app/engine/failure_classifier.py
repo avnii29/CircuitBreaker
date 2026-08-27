@@ -95,6 +95,33 @@ CLASSIFIER: dict[str, FailureClassification] = {
         "explanation": "Issuing rail or switch is down. Same-rail retry is unsafe; reroute to an alternate processor.",
         "strategy": "REROUTE",
     },
+    "ERR_CHECKOUT_ABANDONED": {
+        "error_code": "ERR_CHECKOUT_ABANDONED",
+        "category": "CHECKOUT_ABANDONMENT",
+        "recoverable": True,
+        "severity": "medium",
+        "recommended_routes": ["PAYMENT_LINK"],
+        "explanation": "Customer abandoned checkout. Simulated reminder or nudge can recover the cart.",
+        "strategy": "RETRY",
+    },
+    "ERR_SUBSCRIPTION_TIMEOUT": {
+        "error_code": "ERR_SUBSCRIPTION_TIMEOUT",
+        "category": "SUBSCRIPTION_FAILURE",
+        "recoverable": True,
+        "severity": "medium",
+        "recommended_routes": ["UPI_RETRY", "PAYMENT_LINK"],
+        "explanation": "Subscription renewal timed out. Retry or reroute before the window closes.",
+        "strategy": "RETRY",
+    },
+    "ERR_INVOICE_OVERDUE": {
+        "error_code": "ERR_INVOICE_OVERDUE",
+        "category": "OVERDUE_RECEIVABLE",
+        "recoverable": True,
+        "severity": "medium",
+        "recommended_routes": ["MANUAL_REVIEW"],
+        "explanation": "Invoice is overdue. Simulated collection follow-up is the highest-value action.",
+        "strategy": "RETRY",
+    },
 }
 
 

@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "../api/client";
+import {
+  api,
+  ApiError,
+  cacheTelemetry,
+  checkHealth,
+  getConnectionState,
+  loadCachedTelemetry,
+  noteDataFailure,
+  noteDataSuccess,
+  retryConnection,
+  subscribeConnection,
+  type ConnectionState,
+} from "../api/client";
 import type {
   AuditEvent,
   BatchResult,
@@ -38,10 +50,10 @@ export function randomFailurePayload(): SimulateCheckoutRequest {
 
 export function useCircuitBreaker() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [telemetry, setTelemetry] = useState<TelemetryDashboard | null>(null);
+  const [telemetry, setTelemetry] = useState<TelemetryDashboard | null>(() => loadCachedTelemetry());
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [offline, setOffline] = useState(false);
+  const [connection, setConnection] = useState<ConnectionState>(() => getConnectionState());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,32 +88,42 @@ export function useCircuitBreaker() {
         api.telemetry(),
         api.health(),
       ]);
-      setTransactions(
-        [...txns].sort(
+      setTransactions((prev) => {
+        if (txns.length === 0 && prev.length > 0) return prev;
+        return [...txns].sort(
           (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-        ),
-      );
+        );
+      });
       setTelemetry(tel);
+      cacheTelemetry(tel);
       setHealth(h);
-      setOffline(false);
+      noteDataSuccess();
       try {
         setRouting(await api.routingPerformance());
       } catch {
-        /* telemetry polling remains the source of truth if routing feed lags */
+        /* optional analytics must not break recovery */
       }
     } catch {
-      setOffline(true);
+      noteDataFailure();
     } finally {
       setLoading(false);
     }
   }, []);
 
+  useEffect(() => subscribeConnection(setConnection), []);
+
   useEffect(() => {
     void refresh();
-    const id = window.setInterval(() => {
-      void refresh();
-    }, 2500);
-    return () => window.clearInterval(id);
+    const dataId = window.setInterval(() => {
+      if (getConnectionState() !== "UNAVAILABLE") void refresh();
+    }, 5000);
+    const healthId = window.setInterval(() => {
+      void checkHealth();
+    }, 8000);
+    return () => {
+      window.clearInterval(dataId);
+      window.clearInterval(healthId);
+    };
   }, [refresh]);
 
   useEffect(() => {
@@ -140,8 +162,8 @@ export function useCircuitBreaker() {
         setSelectedId(txn.transaction_id);
         setAuditOpen(true);
         await refresh();
-      } catch {
-        setError("Recovery engine unavailable. Unable to start simulation.");
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : "Unable to start this revenue event.");
       } finally {
         setBusy(null);
       }
@@ -154,15 +176,15 @@ export function useCircuitBreaker() {
     setError(null);
     setNotice(null);
     try {
-      const result = await api.simulateBatch({ count: 50 });
+      const result = await api.simulateBatch({ count: 20, recover: true });
       mergeTransactions(result.transactions);
       if (result.transactions[0]) {
         setSelectedId(result.transactions[0].transaction_id);
         setAuditOpen(true);
       }
       await refresh();
-    } catch {
-      setError("Recovery engine unavailable. Unable to start simulation.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Unable to start the batch simulation.");
     } finally {
       setBusy(null);
     }
@@ -239,6 +261,35 @@ export function useCircuitBreaker() {
     }
   }, [refresh]);
 
+  const startLiveDemo = useCallback(async () => {
+    setBusy("live-demo");
+    setError(null);
+    setNotice(null);
+    try {
+      await api.resetDemo();
+      setTransactions([]);
+      setSelectedId(null);
+      const result = await api.simulateBatch({ count: 20, recover: true });
+      mergeTransactions(result.transactions);
+      if (result.transactions[0]) {
+        setSelectedId(result.transactions[0].transaction_id);
+        setAuditOpen(true);
+      }
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Unable to start the live demo.");
+    } finally {
+      setBusy(null);
+    }
+  }, [mergeTransactions, refresh]);
+
+  const reconnect = useCallback(async () => {
+    setBusy("reconnect");
+    const ok = await retryConnection();
+    if (ok) await refresh();
+    setBusy(null);
+  }, [refresh]);
+
   const resetDemo = useCallback(async () => {
     setBusy("reset");
     setError(null);
@@ -253,8 +304,8 @@ export function useCircuitBreaker() {
       setAuditOpen(false);
       setConfirmReset(false);
       await refresh();
-    } catch {
-      setError("Recovery engine unavailable. Unable to start simulation.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Unable to reset the demo.");
     } finally {
       setBusy(null);
     }
@@ -274,7 +325,8 @@ export function useCircuitBreaker() {
     selected,
     selectedId,
     setSelectedId,
-    offline,
+    connection,
+    offline: connection === "UNAVAILABLE",
     loading,
     busy,
     error,
@@ -292,6 +344,8 @@ export function useCircuitBreaker() {
     setAuditOpen,
     simulate,
     simulateBatch,
+    startLiveDemo,
+    reconnect,
     executeRecovery,
     selectRoute,
     executeSelectedRoute,
