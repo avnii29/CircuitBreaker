@@ -121,6 +121,8 @@ Optional longer-running Postgres/Redis hosting is described in `render.yaml` and
 
 Open the dashboard and click Start live demo.
 
+The demo resets the simulated store before each run, so it can be repeated safely without affecting any real payment or customer data.
+
 That resets the store, creates a deterministic mix of revenue events, runs recovery, and shows:
 
 - revenue at risk
